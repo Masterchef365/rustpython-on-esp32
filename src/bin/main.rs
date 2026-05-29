@@ -10,20 +10,18 @@
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
 use esp_hal::time::{Duration, Instant};
+use esp_backtrace as _;
 
 extern crate alloc;
-
-#[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
-}
 
 #[unsafe(no_mangle)]
 unsafe extern "Rust" fn __getrandom_v03_custom(
     dest: *mut u8,
     len: usize,
 ) -> Result<(), getrandom::Error> {
-    todo!()
+    let slice = unsafe { core::slice::from_raw_parts_mut(dest, len) };
+    esp_hal::rng::Rng::new().read(slice);
+    Ok(())
 }
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
@@ -43,6 +41,43 @@ fn main() -> ! {
     let _peripherals = esp_hal::init(config);
 
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 98768);
+    esp_alloc::heap_allocator!(size: 165 * 1024);
+
+    esp_println::println!("Starting RustPython...");
+
+    let interpreter = rustpython_vm::Interpreter::without_stdlib(Default::default());
+
+    esp_println::println!("Entering scope...");
+
+    let scope = interpreter.enter(|vm| vm.new_scope_with_builtins());
+
+    let source = alloc::string::String::from("6*7");
+
+    esp_println::println!("Starting interpreter...");
+
+    interpreter.enter(|vm| {
+        let result = vm
+            .compile(
+                &source,
+                rustpython_vm::compiler::Mode::Single,
+                alloc::string::String::from("<embedded>")
+            )
+            .map_err(|err| vm.new_syntax_error(&err, Some(&source)))
+            .and_then(|code_obj| vm.run_code_obj(code_obj, scope.clone()));
+
+        match result {
+            Err(e) => {
+                let mut s = alloc::string::String::new();
+                vm.write_exception(&mut s, &e).unwrap();
+                esp_println::println!("Exception: {s}");
+            }
+            Ok(v) => {
+                esp_println::println!("{v:?}");
+            }
+        }
+    });
+
+    esp_println::println!("Done. Looping forever.");
 
     loop {
         let delay_start = Instant::now();
