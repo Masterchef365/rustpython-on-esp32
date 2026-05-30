@@ -41,7 +41,7 @@ fn main() -> ! {
     let _peripherals = esp_hal::init(config);
 
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 98768);
-    esp_alloc::heap_allocator!(size: 165 * 1024);
+    esp_alloc::heap_allocator!(size: 160 * 1024);
 
     esp_println::println!("Starting RustPython...");
 
