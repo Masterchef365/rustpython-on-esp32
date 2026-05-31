@@ -38,7 +38,7 @@ fn main() -> ! {
     // generator parameters: --chip esp32
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
-    let _peripherals = esp_hal::init(config);
+    let p = esp_hal::init(config);
 
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 98768);
     esp_alloc::heap_allocator!(size: 160 * 1024);
