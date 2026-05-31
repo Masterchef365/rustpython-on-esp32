@@ -40,10 +40,16 @@ fn main() -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let p = esp_hal::init(config);
 
-    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 98768);
+    //esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 98768);
     esp_alloc::heap_allocator!(size: 160 * 1024);
+    esp_alloc::psram_allocator!(p.PSRAM, esp_hal::psram);
 
     esp_println::println!("Starting RustPython...");
+
+    let stats = esp_alloc::HEAP.stats();
+    // HeapStats implements the Display and defmt::Format traits, so you can
+    // pretty-print the heap stats.
+    esp_println::println!("{}", stats);
 
     let interpreter = rustpython_vm::Interpreter::without_stdlib(Default::default());
 
@@ -83,6 +89,4 @@ fn main() -> ! {
         let delay_start = Instant::now();
         while delay_start.elapsed() < Duration::from_millis(500) {}
     }
-
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.1.0/examples
 }
