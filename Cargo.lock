@@ -2346,6 +2346,7 @@ dependencies = [
 name = "time-waster"
 version = "0.1.0"
 dependencies = [
+ "critical-section",
  "esp-alloc",
  "esp-backtrace",
  "esp-bootloader-esp-idf",
