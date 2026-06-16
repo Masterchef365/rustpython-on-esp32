@@ -65,28 +65,15 @@ fn main() -> ! {
     // USB serial
     let mut usb = UsbSerialJtag::new(p.USB_DEVICE);
 
-    let mut line = String::new();
-
     loop {
         esp_println::print!(">>> ");
-        line.clear();
-        'getline: loop {
-            while let Ok(byte) = usb.read_byte() {
-                if byte == b'\n' || byte == b'\r' {
-                    break 'getline;
-                }
-
-                if byte != 0x00 {
-                    line.push(byte as char);
-                }
-            }
-        }
+        let line = read_line(&mut usb);
 
         interpreter.enter(|vm| {
             let result = vm
                 .compile(
                     &line,
-                    rustpython_vm::compiler::Mode::Eval,
+                    rustpython_vm::compiler::Mode::Single,
                     alloc::string::String::from("<embedded>")
                 )
                 .map_err(|err| vm.new_syntax_error(&err, Some(&line)))
@@ -99,16 +86,43 @@ fn main() -> ! {
                     esp_println::println!("Exception: {s}");
                 }
                 Ok(v) => {
-                    esp_println::println!("{v:?}");
+                    if let Ok(s) = v.str(vm) {
+                        esp_println::println!("{s}");
+                    } else {
+                        esp_println::println!("{v:?}");
+                    }
                 }
             }
         });
-
-        //esp_println::println!("{}", esp_alloc::HEAP.stats());
-
-        //esp_println::println!("Done. Looping forever.");
-
-        //let delay_start = Instant::now();
-        //while delay_start.elapsed() < Duration::from_millis(5000) {}
     }
+}
+
+
+fn read_line(usb: &mut UsbSerialJtag<'_, Blocking>) -> String {
+    let mut line = String::new();
+    'getline: loop {
+        while let Ok(byte) = usb.read_byte() {
+            match byte {
+                // Backspace
+                0x08 => {
+                    if line.pop().is_some() {
+                        usb.write(&[byte, b' ', byte]);
+                    }
+                }
+                // Other characters
+                _ if byte.is_ascii() && !byte.is_ascii_control() => {
+                    usb.write(&[byte]);
+                    line.push(char::from(byte));
+                }
+                // Newlines
+                b'\n' | b'\r' => {
+                    usb.write(&[byte]);
+                    break 'getline;
+                }
+                _ => continue,
+            }
+        }
+    }
+
+    line
 }
