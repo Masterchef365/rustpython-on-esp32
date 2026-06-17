@@ -208,7 +208,7 @@ fn install_meminfo_fn(vm: &VirtualMachine, scope: &Scope) {
 /// This will turn the string 'run_my_code "6 " 7' into 'run_my_code("6 ", 7)'
 /// for example.
 fn parse_command_line(line: &str) -> Option<String> {
-    let (func_name, xs) = line.split_once(char::is_whitespace)?;
+    let (func_name, xs) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
 
     let mut double_quote = false;
     let mut single_quote = false;
@@ -224,7 +224,7 @@ fn parse_command_line(line: &str) -> Option<String> {
                     current_arg.push(c);
                 }
                 backslash = !backslash;
-            }
+            },
             '"' => {
                 current_arg.push(c);
                 if !(backslash | single_quote) {
@@ -246,17 +246,15 @@ fn parse_command_line(line: &str) -> Option<String> {
                     current_arg.push(c);
                 }
                 backslash = false
-            }
+            },
             _ => {
                 current_arg.push(c);
                 backslash = false;
-            }
+            },
         }
     }
 
-    if !current_arg.is_empty() {
-        args.push(current_arg);
-    }
+    args.push(current_arg);
 
     let mut call = format!("{func_name}(");
 
@@ -275,55 +273,26 @@ fn parse_command_line(line: &str) -> Option<String> {
 #[cfg(test)]
 #[test]
 fn test_parse_command_line_1() {
-    assert_eq!(
-        parse_command_line("a 'b' 'c'"),
-        Some("a('b', 'c')".to_string())
-    );
-    assert_eq!(
-        parse_command_line("afunction 'bar' 5"),
-        Some("afunction('bar', 5)".to_string())
-    );
+    assert_eq!(parse_command_line("a 'b' 'c'"), Some("a('b', 'c')".to_string()));
+    assert_eq!(parse_command_line("afunction 'bar' 5"), Some("afunction('bar', 5)".to_string()));
 }
 
 #[cfg(test)]
 #[test]
 fn test_parse_command_line_2() {
-    assert_eq!(
-        parse_command_line("afunction 'bar\"' 5"),
-        Some("afunction('bar\"', 5)".to_string())
-    );
-    assert_eq!(
-        parse_command_line("afunction \"bar'\" 5"),
-        Some("afunction(\"bar'\", 5)".to_string())
-    );
-    assert_eq!(
-        parse_command_line("afunction \"'bar'\" 5"),
-        Some("afunction(\"'bar'\", 5)".to_string())
-    );
-    assert_eq!(
-        parse_command_line("afunction '\"bar\"' 5"),
-        Some("afunction('\"bar\"', 5)".to_string())
-    );
+    assert_eq!(parse_command_line("afunction 'bar\"' 5"), Some("afunction('bar\"', 5)".to_string()));
+    assert_eq!(parse_command_line("afunction \"bar'\" 5"), Some("afunction(\"bar'\", 5)".to_string()));
+    assert_eq!(parse_command_line("afunction \"'bar'\" 5"), Some("afunction(\"'bar'\", 5)".to_string()));
+    assert_eq!(parse_command_line("afunction '\"bar\"' 5"), Some("afunction('\"bar\"', 5)".to_string()));
 }
 
 #[cfg(test)]
 #[test]
 fn test_parse_command_line_3() {
-    assert_eq!(
-        parse_command_line("afunction 'bar \"' 5"),
-        Some("afunction('bar \"', 5)".to_string())
-    );
-    assert_eq!(
-        parse_command_line("afunction 'bar \" no bueno \"' 5"),
-        Some("afunction('bar \" no bueno \"', 5)".to_string())
-    );
-    assert_eq!(
-        parse_command_line("afunction 'bar, \" no bueno \"' 5"),
-        Some("afunction('bar, \" no bueno \"', 5)".to_string())
-    );
+    assert_eq!(parse_command_line("afunction 'bar \"' 5"), Some("afunction('bar \"', 5)".to_string()));
+    assert_eq!(parse_command_line("afunction 'bar \" no bueno \"' 5"), Some("afunction('bar \" no bueno \"', 5)".to_string()));
+    assert_eq!(parse_command_line("afunction 'bar, \" no bueno \"' 5"), Some("afunction('bar, \" no bueno \"', 5)".to_string()));
     // We are supposed to create a parse error when the other way is used
-    assert_eq!(
-        parse_command_line("afunction('bar, \" no bueno \"', 5)"),
-        Some("afunction('bar,(\" no bueno \"', 5))".to_string())
-    );
+    assert_eq!(parse_command_line("afunction('bar, \" no bueno \"', 5)"), Some("afunction('bar,(\" no bueno \"', 5))".to_string()));
+    assert_eq!(parse_command_line("heapstats"), Some("heapstats()".to_string()));
 }
