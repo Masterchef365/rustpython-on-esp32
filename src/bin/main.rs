@@ -8,6 +8,7 @@
 #![deny(clippy::large_stack_frames)]
 
 use alloc::string::String;
+use alloc::vec;
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
 use esp_hal::time::{Duration, Instant};
@@ -17,6 +18,7 @@ use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::{
     Blocking,
 };
+use rustpython_vm::VirtualMachine;
 use core::cell::RefCell;
 
 extern crate alloc;
@@ -58,6 +60,8 @@ fn main() -> ! {
     esp_println::println!("Entering scope...");
 
     let scope = interpreter.enter(|vm| vm.new_scope_with_builtins());
+
+    interpreter.enter(|vm| install_stdout(vm));
 
     esp_println::println!("Starting interpreter...");
     esp_println::println!("{}", esp_alloc::HEAP.stats());
@@ -106,7 +110,7 @@ fn read_line(usb: &mut UsbSerialJtag<'_, Blocking>) -> String {
                 // Backspace
                 0x08 => {
                     if line.pop().is_some() {
-                        usb.write(&[byte, b' ', byte]);
+                        usb.write(&[0x08, b' ', 0x08]);
                     }
                 }
                 // Other characters
@@ -119,6 +123,16 @@ fn read_line(usb: &mut UsbSerialJtag<'_, Blocking>) -> String {
                     usb.write(&[byte]);
                     break 'getline;
                 }
+                /*
+                // Recall line
+                0x1B => {
+                    for _ in 0..line.len() {
+                        usb.write(&[0x08, b' ', 0x08]);
+                    }
+                    core::mem::swap(&mut line, prev_line);
+                    usb.write(line.as_bytes());
+                },
+                */
                 _ => continue,
             }
         }
@@ -126,3 +140,23 @@ fn read_line(usb: &mut UsbSerialJtag<'_, Blocking>) -> String {
 
     line
 }
+
+fn anon_object(vm: &VirtualMachine, name: &str) -> rustpython_vm::PyObjectRef {
+    let py_type = vm.builtins.get_attr("type", vm).unwrap();
+    let args = (name, vm.ctx.new_tuple(vec![]), vm.ctx.new_dict());
+    py_type.call(args, vm).unwrap()
+}
+
+
+fn install_stdout(vm: &VirtualMachine) {
+    let sys = vm.import("sys", 0).unwrap();
+
+    let stdout = anon_object(vm, "InternalStdout");
+
+    let writer = vm.new_function("write", move |s: String| esp_println::print!("{s}"));
+
+    stdout.set_attr("write", writer, vm).unwrap();
+
+    sys.set_attr("stdout", stdout.clone(), vm).unwrap();
+}
+
