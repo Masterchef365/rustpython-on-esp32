@@ -9,17 +9,19 @@
 
 use alloc::string::String;
 use alloc::vec;
+use core::cell::RefCell;
+use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
 use esp_hal::time::{Duration, Instant};
-use esp_backtrace as _;
-use esp_hal::uart::{Config as UartConfig, DataBits, Parity, RxConfig, StopBits, Uart, UartInterrupt};
-use esp_hal::usb_serial_jtag::UsbSerialJtag;
-use esp_hal::{
-    Blocking,
+use esp_hal::uart::{
+    Config as UartConfig, DataBits, Parity, RxConfig, StopBits, Uart, UartInterrupt,
 };
+use esp_hal::usb_serial_jtag::UsbSerialJtag;
+use esp_hal::Blocking;
+use rustpython_vm::convert::IntoObject;
+use rustpython_vm::scope::Scope;
 use rustpython_vm::VirtualMachine;
-use core::cell::RefCell;
 
 extern crate alloc;
 
@@ -48,8 +50,7 @@ fn main() -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let p = esp_hal::init(config);
 
-    //esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 98768);
-    //esp_alloc::heap_allocator!(size: 160 * 1024);
+    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64000);
     esp_alloc::psram_allocator!(p.PSRAM, esp_hal::psram);
 
     esp_println::println!("Starting RustPython...");
@@ -61,7 +62,10 @@ fn main() -> ! {
 
     let scope = interpreter.enter(|vm| vm.new_scope_with_builtins());
 
-    interpreter.enter(|vm| install_stdout(vm));
+    interpreter.enter(|vm| {
+        install_meminfo_fn(vm, &scope);
+        install_stdout(vm);
+    });
 
     esp_println::println!("Starting interpreter...");
     esp_println::println!("{}", esp_alloc::HEAP.stats());
@@ -69,16 +73,18 @@ fn main() -> ! {
     // USB serial
     let mut usb = UsbSerialJtag::new(p.USB_DEVICE);
 
+    let mut prev_line = String::new();
+
     loop {
         esp_println::print!(">>> ");
-        let line = read_line(&mut usb);
+        let line = read_line(&mut usb, &mut prev_line);
 
         interpreter.enter(|vm| {
             let result = vm
                 .compile(
                     &line,
                     rustpython_vm::compiler::Mode::Single,
-                    alloc::string::String::from("<embedded>")
+                    alloc::string::String::from("<embedded>"),
                 )
                 .map_err(|err| vm.new_syntax_error(&err, Some(&line)))
                 .and_then(|code_obj| vm.run_code_obj(code_obj, scope.clone()));
@@ -98,11 +104,12 @@ fn main() -> ! {
                 }
             }
         });
+
+        prev_line = line;
     }
 }
 
-
-fn read_line(usb: &mut UsbSerialJtag<'_, Blocking>) -> String {
+fn read_line(usb: &mut UsbSerialJtag<'_, Blocking>, prev_line: &mut String) -> String {
     let mut line = String::new();
     'getline: loop {
         while let Ok(byte) = usb.read_byte() {
@@ -120,19 +127,20 @@ fn read_line(usb: &mut UsbSerialJtag<'_, Blocking>) -> String {
                 }
                 // Newlines
                 b'\n' | b'\r' => {
-                    usb.write(&[byte]);
+                    usb.write(b"\n");
                     break 'getline;
                 }
-                /*
-                // Recall line
-                0x1B => {
-                    for _ in 0..line.len() {
-                        usb.write(&[0x08, b' ', 0x08]);
+                // Escape codes
+                0x1B => match [usb.read_byte(), usb.read_byte()] {
+                    [Ok(b'['), Ok(b'A' | b'B')] => {
+                        for _ in 0..line.len() {
+                            usb.write(&[0x08, b' ', 0x08]);
+                        }
+                        core::mem::swap(&mut line, prev_line);
+                        usb.write(line.as_bytes());
                     }
-                    core::mem::swap(&mut line, prev_line);
-                    usb.write(line.as_bytes());
+                    _ => {}
                 },
-                */
                 _ => continue,
             }
         }
@@ -147,7 +155,6 @@ fn anon_object(vm: &VirtualMachine, name: &str) -> rustpython_vm::PyObjectRef {
     py_type.call(args, vm).unwrap()
 }
 
-
 fn install_stdout(vm: &VirtualMachine) {
     let sys = vm.import("sys", 0).unwrap();
 
@@ -160,3 +167,12 @@ fn install_stdout(vm: &VirtualMachine) {
     sys.set_attr("stdout", stdout.clone(), vm).unwrap();
 }
 
+fn install_meminfo_fn(vm: &VirtualMachine, scope: &Scope) {
+    let heapstats = vm.new_function("heapstats", move || {
+        esp_println::print!("{}", esp_alloc::HEAP.stats())
+    });
+
+    scope
+        .globals
+        .set_item("heapstats", heapstats.into_object(), vm);
+}

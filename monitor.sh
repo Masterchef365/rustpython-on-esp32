@@ -1,1 +1,1 @@
-sudo cu --line /dev/ttyACM*
+RUST_LOG=off espflash monitor

@@ -15,9 +15,9 @@ esp-alloc        = "0.10.0"
 esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32s3"] }
 critical-section = "1.2.0"
 
-#rustpython-vm = { path = "../RustPython/vm/", default-features = false, features = ["compiler"] }
 getrandom = { version = "0.3", features = [] }
 rustpython-vm = { git = "https://github.com/Masterchef365/RustPython.git", branch = "esp32", default-features = false, features = ["compiler"] }
+#rustpython-vm = { path = "../RustPython/vm/", default-features = false, features = ["compiler"] }
 lazy_static = { version = "1.0", features = ["spin_no_std"] }
 volatile = "0.2.6"
 esp-println = { version = "0.17.0", features = ["esp32s3"] }
