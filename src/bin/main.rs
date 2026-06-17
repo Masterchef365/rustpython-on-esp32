@@ -8,7 +8,8 @@
 #![deny(clippy::large_stack_frames)]
 
 use alloc::string::String;
-use alloc::vec;
+use alloc::string::ToString;
+use alloc::{format, vec};
 use core::cell::RefCell;
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
@@ -78,22 +79,47 @@ fn main() -> ! {
     loop {
         esp_println::print!(">>> ");
         let line = read_line(&mut usb, &mut prev_line);
+        let command_line = parse_command_line(&line);
 
+        let source_path = "<embedded>";
+        let mode = rustpython_vm::compiler::Mode::Single;
         interpreter.enter(|vm| {
-            let result = vm
-                .compile(
-                    &line,
-                    rustpython_vm::compiler::Mode::Single,
-                    alloc::string::String::from("<embedded>"),
-                )
-                .map_err(|err| vm.new_syntax_error(&err, Some(&line)))
-                .and_then(|code_obj| vm.run_code_obj(code_obj, scope.clone()));
+            let result = command_line
+                .ok_or_else(|| "No command".to_string())
+                .and_then(|command_line| {
+                    vm.compile(
+                        &command_line,
+                        mode,
+                        alloc::string::String::from(source_path),
+                    )
+                    .map_err(|err| vm.new_syntax_error(&err, Some(&command_line)))
+                    .map_err(|e| {
+                        let mut s = alloc::string::String::new();
+                        vm.write_exception(&mut s, &e).unwrap();
+                        s
+                    })
+                })
+                .or_else(|other_error| {
+                    vm.compile(&line, mode, alloc::string::String::from(source_path))
+                        .map_err(|err| vm.new_syntax_error(&err, Some(&line)))
+                        .map_err(|e| {
+                            let mut s = alloc::string::String::new();
+                            vm.write_exception(&mut s, &e).unwrap();
+                            format!("{s}\n{other_error}")
+                        })
+                });
+
+            let result = result.and_then(|code_obj| {
+                vm.run_code_obj(code_obj, scope.clone()).map_err(|e| {
+                    let mut s = alloc::string::String::new();
+                    vm.write_exception(&mut s, &e).unwrap();
+                    format!("{s}")
+                })
+            });
 
             match result {
                 Err(e) => {
-                    let mut s = alloc::string::String::new();
-                    vm.write_exception(&mut s, &e).unwrap();
-                    esp_println::println!("Exception: {s}");
+                    esp_println::println!("Exception: {e}");
                 }
                 Ok(v) => {
                     if let Ok(s) = v.str(vm) {
@@ -175,4 +201,129 @@ fn install_meminfo_fn(vm: &VirtualMachine, scope: &Scope) {
     scope
         .globals
         .set_item("heapstats", heapstats.into_object(), vm);
+}
+
+/// Attempt to assemble a function call string, from a 'command line'
+/// style syntax.
+/// This will turn the string 'run_my_code "6 " 7' into 'run_my_code("6 ", 7)'
+/// for example.
+fn parse_command_line(line: &str) -> Option<String> {
+    let (func_name, xs) = line.split_once(char::is_whitespace)?;
+
+    let mut double_quote = false;
+    let mut single_quote = false;
+    let mut backslash = false;
+
+    let mut args = vec![];
+    let mut current_arg = String::new();
+
+    for c in xs.chars() {
+        match c {
+            '\\' => {
+                if backslash {
+                    current_arg.push(c);
+                }
+                backslash = !backslash;
+            }
+            '"' => {
+                current_arg.push(c);
+                if !(backslash | single_quote) {
+                    double_quote = !double_quote;
+                }
+                backslash = false;
+            }
+            '\'' => {
+                current_arg.push(c);
+                if !(backslash | double_quote) {
+                    single_quote = !single_quote;
+                }
+                backslash = false;
+            }
+            ' ' => {
+                if !(backslash | double_quote | single_quote) {
+                    args.push(core::mem::take(&mut current_arg));
+                } else {
+                    current_arg.push(c);
+                }
+                backslash = false
+            }
+            _ => {
+                current_arg.push(c);
+                backslash = false;
+            }
+        }
+    }
+
+    if !current_arg.is_empty() {
+        args.push(current_arg);
+    }
+
+    let mut call = format!("{func_name}(");
+
+    for (idx, arg) in args.iter().enumerate() {
+        call.push_str(&arg);
+        if idx + 1 != args.len() {
+            call.push_str(", ");
+        }
+    }
+
+    call.push(')');
+
+    Some(call)
+}
+
+#[cfg(test)]
+#[test]
+fn test_parse_command_line_1() {
+    assert_eq!(
+        parse_command_line("a 'b' 'c'"),
+        Some("a('b', 'c')".to_string())
+    );
+    assert_eq!(
+        parse_command_line("afunction 'bar' 5"),
+        Some("afunction('bar', 5)".to_string())
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn test_parse_command_line_2() {
+    assert_eq!(
+        parse_command_line("afunction 'bar\"' 5"),
+        Some("afunction('bar\"', 5)".to_string())
+    );
+    assert_eq!(
+        parse_command_line("afunction \"bar'\" 5"),
+        Some("afunction(\"bar'\", 5)".to_string())
+    );
+    assert_eq!(
+        parse_command_line("afunction \"'bar'\" 5"),
+        Some("afunction(\"'bar'\", 5)".to_string())
+    );
+    assert_eq!(
+        parse_command_line("afunction '\"bar\"' 5"),
+        Some("afunction('\"bar\"', 5)".to_string())
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn test_parse_command_line_3() {
+    assert_eq!(
+        parse_command_line("afunction 'bar \"' 5"),
+        Some("afunction('bar \"', 5)".to_string())
+    );
+    assert_eq!(
+        parse_command_line("afunction 'bar \" no bueno \"' 5"),
+        Some("afunction('bar \" no bueno \"', 5)".to_string())
+    );
+    assert_eq!(
+        parse_command_line("afunction 'bar, \" no bueno \"' 5"),
+        Some("afunction('bar, \" no bueno \"', 5)".to_string())
+    );
+    // We are supposed to create a parse error when the other way is used
+    assert_eq!(
+        parse_command_line("afunction('bar, \" no bueno \"', 5)"),
+        Some("afunction('bar,(\" no bueno \"', 5))".to_string())
+    );
 }
